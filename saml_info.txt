@@ -1,0 +1,8 @@
+http://saml.sp.com:8080/openam/saml2/jsp/exportmetadata.jsp?entityid=http://saml.sp.com:8080/openam
+
+http://saml.idp.com:8080/openam/saml2/jsp/exportmetadata.jsp?entityid=http://saml.idp.com:8080/openam
+
+http://saml.idp.com:8080/openam
+
+authenticationStep
+/openam?realm=/&service=saml_tree&authIndexType=service&authIndexValue=saml_tree
