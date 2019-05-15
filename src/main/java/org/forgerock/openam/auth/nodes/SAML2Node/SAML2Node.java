@@ -36,6 +36,8 @@ import org.forgerock.openam.auth.node.api.Action;
 import org.forgerock.openam.auth.node.api.ExternalRequestContext;
 import org.forgerock.openam.auth.node.api.Node;
 import org.forgerock.openam.auth.node.api.NodeProcessException;
+import org.forgerock.openam.auth.node.api.OutcomeProvider;
+import org.forgerock.openam.auth.node.api.SharedStateConstants;
 import org.forgerock.openam.auth.node.api.TreeContext;
 import org.forgerock.openam.auth.nodes.oauth.AbstractSocialAuthLoginNode;
 import org.forgerock.openam.auth.nodes.oauth.SocialOAuth2Helper;
@@ -45,18 +47,27 @@ import org.forgerock.openam.authentication.modules.saml2.SAML2ResponseData;
 import org.forgerock.openam.core.CoreWrapper;
 import org.forgerock.openam.core.realms.Realm;
 import org.forgerock.openam.federation.saml2.SAML2TokenRepositoryException;
+import org.forgerock.openam.ldap.LDAPUtils;
 import org.forgerock.openam.saml2.SAML2Store;
+import org.forgerock.openam.utils.CollectionUtils;
 import org.forgerock.openam.utils.JsonValueBuilder;
 import org.forgerock.openam.utils.StringUtils;
 import org.forgerock.openam.xui.XUIState;
+import org.forgerock.opendj.ldap.Dn;
+import org.forgerock.util.i18n.PreferredLocales;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.collect.ImmutableList;
 import com.google.inject.assistedinject.Assisted;
 import com.sun.identity.authentication.AuthContext;
 import com.sun.identity.authentication.client.AuthClientUtils;
 import com.sun.identity.authentication.spi.AuthLoginException;
 import com.sun.identity.authentication.spi.RedirectCallback;
+import com.sun.identity.idm.AMIdentity;
+import com.sun.identity.idm.IdRepoException;
+import com.sun.identity.idm.IdUtils;
+import com.sun.identity.plugin.datastore.DataStoreProviderException;
 import com.sun.identity.saml2.assertion.Assertion;
 import com.sun.identity.saml2.assertion.EncryptedID;
 import com.sun.identity.saml2.assertion.NameID;
@@ -68,6 +79,7 @@ import com.sun.identity.saml2.common.SAML2Exception;
 import com.sun.identity.saml2.common.SAML2FailoverUtils;
 import com.sun.identity.saml2.common.SAML2Utils;
 import com.sun.identity.saml2.jaxb.entityconfig.SPSSOConfigElement;
+import com.sun.identity.saml2.jaxb.metadata.AffiliationDescriptorType;
 import com.sun.identity.saml2.jaxb.metadata.EndpointType;
 import com.sun.identity.saml2.jaxb.metadata.IDPSSODescriptorType;
 import com.sun.identity.saml2.jaxb.metadata.SPSSODescriptorType;
@@ -76,6 +88,8 @@ import com.sun.identity.saml2.meta.SAML2MetaException;
 import com.sun.identity.saml2.meta.SAML2MetaManager;
 import com.sun.identity.saml2.plugins.DefaultLibrarySPAccountMapper;
 import com.sun.identity.saml2.plugins.SAML2PluginsUtils;
+import com.sun.identity.saml2.plugins.SPAccountMapper;
+import com.sun.identity.saml2.plugins.SPAttributeMapper;
 import com.sun.identity.saml2.profile.AuthnRequestInfo;
 import com.sun.identity.saml2.profile.AuthnRequestInfoCopy;
 import com.sun.identity.saml2.profile.ResponseInfo;
@@ -119,6 +133,7 @@ public class SAML2Node extends AbstractDecisionNode {
 
     private static final String BUNDLE_NAME = "amAuthSAML2";
     private ResourceBundle bundle = null;
+    private static final String BUNDLE = "org.forgerock.openam.auth.nodes.SAML2Node";
 
 
 
@@ -147,13 +162,11 @@ public class SAML2Node extends AbstractDecisionNode {
     private ResponseInfo respInfo;
     private boolean isTransient;
     private Principal principal;
-    private SocialOAuth2Helper authModuleHelper;
+    private SocialOAuth2Helper authNodeHelper;
 
 
     private static final String MAIL_KEY_MAPPING = "mail";
-
-
-
+    private static final String PROPERTY_VALUES_SEPARATOR = "|";
 
 
 
@@ -216,12 +229,11 @@ public class SAML2Node extends AbstractDecisionNode {
      */
     @Inject
     public SAML2Node(@Assisted Config config, @Assisted Realm realm, CoreWrapper coreWrapper,
-                      SocialOAuth2Helper authModuleHelper) throws NodeProcessException {
+                      SocialOAuth2Helper authNodeHelper) throws NodeProcessException {
         this.config = config;
         this.realm = realm;
         this.coreWrapper = coreWrapper;
-        this.authModuleHelper = authModuleHelper;
-
+        this.authNodeHelper = authNodeHelper;
 
         nameIDFormat = config.nameIdFormat();
         entityName = config.entityName();
@@ -240,15 +252,14 @@ public class SAML2Node extends AbstractDecisionNode {
         this.bundle = context.request.locales.getBundleInPreferredLocale(BUNDLE_NAME, getClass().getClassLoader());
         String spName = null;
 
-        final HttpServletRequest request = null;
-        final HttpServletResponse response = null;
+        final HttpServletRequest request = context.request.servletRequest;
+        final HttpServletResponse response = context.request.servletResponse;
 
-        //TODO Uncomment once I have access to request
-//        if (null == request) {
-//            throw new NodeProcessException("Unable to login without http request.  Programmatic login is not " +
-//                                                    "supported.");
-//
-//        }
+        if (null == request) {
+            throw new NodeProcessException("Unable to login without http request.  Programmatic login is not " +
+                                                    "supported.");
+
+        }
         try {
             spName = metaManager.getEntityByMetaAlias(metaAlias);
             if (authenticationContext != null) {
@@ -297,8 +308,8 @@ public class SAML2Node extends AbstractDecisionNode {
             throw new SAML2Exception(SAML2Utils.bundle.getString("ssoServiceNotfound"));
         }
         if (reqBinding == null) {
-            SAML2Utils.debug.message("SAML2 :: initiateSAMLLoginAtIDP() reqBinding is null using endpoint  binding: {}",
-                                     endPoint.getBinding());
+            logger.debug("SAML2 :: initiateSAMLLoginAtIDP() reqBinding is null using endpoint  binding: {}",
+                          endPoint.getBinding());
             reqBinding = endPoint.getBinding();
             if (reqBinding == null) {
                 throw new SAML2Exception(SAML2Utils.bundle.getString("UnableTofindBinding"));
@@ -306,7 +317,7 @@ public class SAML2Node extends AbstractDecisionNode {
         }
 
         String ssoURL = endPoint.getLocation();
-        SAML2Utils.debug.message("SAML2 :: initiateSAMLLoginAtIDP()  ssoURL : {}", ssoURL);
+        logger.debug("SAML2 :: initiateSAMLLoginAtIDP()  ssoURL : {}", ssoURL);
 
         final List extensionsList = SPSSOFederate.getExtensionsList(spEntityID, String.valueOf(realm));
         final Map<String, Collection<String>> spConfigAttrsMap
@@ -327,8 +338,7 @@ public class SAML2Node extends AbstractDecisionNode {
         saveAuthnRequest(authnRequest, reqInfo);
 
         final RedirectCallback redirectCallback = new RedirectCallback();
-        //TODO Uncomment when we have request and response
-//        setCookiesForRedirects(request, response);
+        setCookiesForRedirects(request, response);
 
         //we only handle Redirect and POST
         if (SAML2Constants.HTTP_POST.equals(reqBinding)) {
@@ -354,8 +364,7 @@ public class SAML2Node extends AbstractDecisionNode {
 
         ExternalRequestContext externalRequestContext = context.request;
 
-        //TODO uncomment when we have request and response
-//        removeCookiesForRedirects(request, response);
+        removeCookiesForRedirects(request, response);
 
         if (Boolean.parseBoolean(externalRequestContext.parameters.get(SAML2Proxy.ERROR_PARAM_KEY).get(0))) {
             handleRedirectError(externalRequestContext);
@@ -372,7 +381,6 @@ public class SAML2Node extends AbstractDecisionNode {
             }
         }
 
-        final String username;
         SAML2ResponseData data = null;
 
         if (!StringUtils.isBlank(key)) {
@@ -402,61 +410,198 @@ public class SAML2Node extends AbstractDecisionNode {
         respInfo = data.getResponseInfo();
         JsonValue sharedState = context.sharedState;
 
-        try { //you're already linked or we auto looked up user
-            username = SPACSUtils
-                    .getPrincipalWithoutLogin(assertionSubject, authnAssertion, realm.toString(), spName, metaManager,
-                                              entityName, storageKey);
-            //TODO Need to figure out how to handle dynamic profile scenarios
-//            if (SAML2PluginsUtils.isDynamicProfile(realm.toString())) {
-            if (true) {
-                String spEntityId = SPSSOFederate.getSPEntityId(metaAlias);
-                if (shouldPersistNameID(spEntityId)) {
-                    NameIDInfo info = new NameIDInfo(spEntityId, entityName, getNameId(), SAML2Constants.SP_ROLE,
-                                                     false);
+        final EncryptedID encId = assertionSubject.getEncryptedID();
+        final SPSSOConfigElement spssoconfig;
+        final SPAccountMapper acctMapper;
+        try {
+            spssoconfig = metaManager.getSPSSOConfig(realm.toString(), spName);
+            acctMapper = SAML2Utils.getSPAccountMapper(realm.toString(), spName);
+        } catch (SAML2Exception e) {
+            throw new NodeProcessException(e);
+        }
+        final Set<PrivateKey> decryptionKeys = KeyUtil.getDecryptionKeys(spssoconfig);
+        boolean needNameIDEncrypted = false;
+        NameID nameId = assertionSubject.getNameID();
 
-                    // Setup attributes in shared state so that we can leverage Provision Dynamic Account Node and
-                    // Provision IDM Account Node to create user profiles
-                    Map<String, Set<String>> attributes = AccountUtils.convertToAttributes(info, null);
-                    Map<String, Set<String>> userNames = Collections.singletonMap("uid",
-                                                                                  Collections.singleton(username));
-                    Optional<String> user = authModuleHelper.userExistsInTheDataStore(
-                            context.sharedState.get("realm").asString(),
-                            OAuthUtil.instantiateAccountProvider("org.forgerock.openam.authentication.modules.common.mapping.DefaultAccountProvider"), userNames);
-                    if (user.isPresent()) {
-                        return Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.ACCOUNT_EXISTS.name())
-                                     .replaceSharedState(sharedState);
+        String assertionEncryptedAttr =
+                SAML2Utils.getAttributeValueFromSPSSOConfig(spssoconfig, SAML2Constants.WANT_ASSERTION_ENCRYPTED);
+        if (!Boolean.parseBoolean(assertionEncryptedAttr)) {
+            String idEncryptedStr =
+                    SAML2Utils.getAttributeValueFromSPSSOConfig(spssoconfig, SAML2Constants.WANT_NAMEID_ENCRYPTED);
+            needNameIDEncrypted = Boolean.parseBoolean(idEncryptedStr);
+        }
+
+        if (needNameIDEncrypted && encId == null) {
+            throw new NodeProcessException(SAML2Utils.bundle.getString("nameIDNotEncrypted"));
+        }
+        if (encId != null) {
+            try {
+                nameId = encId.decrypt(decryptionKeys);
+            } catch (SAML2Exception e) {
+                throw new NodeProcessException(e);
+            }
+        }
+
+        SPSSODescriptorType spDesc = null;
+        try {
+            spDesc = metaManager.getSPSSODescriptor(realm.toString(), spName);
+        } catch (SAML2MetaException ex) {
+            logger.error("Unable to read SPSSODescription", ex);
+        }
+
+        if (spDesc == null) {
+            throw new NodeProcessException(SAML2Utils.bundle.getString("metaDataError"));
+        }
+
+        final String nameIDFormat = config.nameIdFormat();
+        if (nameIDFormat != null) {
+            List spNameIDFormatList = spDesc.getNameIDFormat();
+
+            if (CollectionUtils.isNotEmpty(spNameIDFormatList) && !spNameIDFormatList.contains(nameIDFormat)) {
+                throw new NodeProcessException("Unsupported NameIDFormat SP: " + nameIDFormat);
+            }
+        }
+
+        final boolean isTransient = SAML2Constants.NAMEID_TRANSIENT_FORMAT.equals(nameIDFormat);
+        final boolean disableNameIDPersistence = !acctMapper.shouldPersistNameIDFormat(realm.toString(), spName,
+                                                                                       entityName, nameIDFormat);
+        final boolean persistNameId = !isTransient && !disableNameIDPersistence;
+
+        Map nameIdKeyMap;
+        try {
+            nameIdKeyMap = SAML2Utils.getNameIDKeyMap(nameId, spName, entityName, realm.toString(), SAML2Constants.SP_ROLE);
+        } catch (SAML2Exception e) {
+            throw new NodeProcessException(e);
+        }
+
+        String username = null;
+        //If nameID format isn't transient and we should should persist name ID returns true, then look for user via
+        // nameID
+        if (persistNameId) {
+            try {
+                username = SAML2Utils.getDataStoreProvider().getUserID(realm.toString(), nameIdKeyMap);
+                if (StringUtils.isNotEmpty(username)) {
+                    AMIdentity identity;
+                    try {
+                        identity = new AMIdentity(null, username);
+                    } catch (IdRepoException e) {
+                        throw new NodeProcessException(e);
                     }
-                    sharedState.put(USER_INFO_SHARED_STATE_KEY, json(object(
-                            field(ATTRIBUTES_SHARED_STATE_KEY, convertToMapOfList(attributes)),
-                            field(USER_NAMES_SHARED_STATE_KEY, convertToMapOfList(userNames)))));
+                    String univ = identity.getName();
+                    return Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.ACCOUNT_EXISTS.name())
+                                 .replaceSharedState(sharedState.put(SharedStateConstants.USERNAME, univ));
+                }
+            } catch (DataStoreProviderException | SAML2Exception e) {
+                throw new NodeProcessException(e);
+            }
+        }
 
-                    if (attributes.get(MAIL_KEY_MAPPING) != null) {
-                        sharedState.put(EMAIL_ADDRESS, attributes.get(MAIL_KEY_MAPPING).stream().findAny().get());
-                    } else {
-                        logger.debug("Unable to ascertain email address because the information is not available. "
-                                             +
-                                             "It's possible you need to add a scope or that the configured provider does not have this "
-                                             + "information");
+        // If we haven't found the user yet, use the configured account mapper to find the user based on auto
+        // federation or transient user configuration
+        if (StringUtils.isEmpty(username)) {
+            try {
+                username = acctMapper.getIdentity(authnAssertion, spName, realm.toString());
+                if (StringUtils.isNotEmpty(username)) {
+                    try {
+                        AMIdentity identity = new AMIdentity(null, username);
+                        String univ = identity.getName();
+                        if (persistNameId) {
+                            try {
+                                final NameIDInfo info;
+                                final String affiID = nameId.getSPNameQualifier();
+                                boolean isDualRole = SAML2Utils.isDualRole(spName, realm.toString());
+                                AffiliationDescriptorType affiDesc = null;
+
+                                if (affiID != null && !affiID.isEmpty()) {
+                                    affiDesc = metaManager.getAffiliationDescriptor(realm.toString(), affiID);
+                                }
+
+                                if (affiDesc != null) {
+                                    if (!affiDesc.getAffiliateMember().contains(spName)) {
+                                        throw new SAML2Exception("Unable to locate SP Entity ID in the affiliate descriptor.");
+                                    }
+                                    if (isDualRole) {
+                                        info = new NameIDInfo(affiID, entityName, nameId, SAML2Constants.DUAL_ROLE, true);
+                                    } else {
+                                        info = new NameIDInfo(affiID, entityName, nameId, SAML2Constants.SP_ROLE, true);
+                                    }
+                                } else {
+                                    if (isDualRole) {
+                                        info = new NameIDInfo(spName, entityName, nameId, SAML2Constants.DUAL_ROLE, false);
+                                    } else {
+                                        info = new NameIDInfo(spName, entityName, nameId, SAML2Constants.SP_ROLE, false);
+                                    }
+                                }
+
+                                // write fed info into data store
+                                SPCache.fedAccountHash.put(storageKey, "true");
+                                AccountUtils.setAccountFederation(info, username);
+                            } catch (SAML2Exception se) {
+                                throw new NodeProcessException(se);
+                            }
+                        }
+                        return Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.ACCOUNT_EXISTS.name())
+                                     .replaceSharedState(sharedState.put(SharedStateConstants.USERNAME, univ));
+                    } catch (IdRepoException e) {
+                        return Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.NO_ACCOUNT.name())
+                                     .replaceSharedState(setupAttributes(spName, sharedState, persistNameId, username));
                     }
                 }
+
+
+            } catch (SAML2Exception e) {
+                throw new NodeProcessException(e);
+            }
+        }
+
+
+
+        return Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.NO_ACCOUNT.name())
+                     .replaceSharedState(setupAttributes(spName, sharedState, persistNameId, username));
+
+    }
+
+    private JsonValue setupAttributes(String spName, JsonValue sharedState, boolean persistNameId, String username1)
+            throws NodeProcessException, AuthLoginException {
+        Map<String, Set<String>> attributes;
+        try {
+            attributes = linkAttributeValues(authnAssertion, username1);
+        } catch (SAML2Exception e) {
+            throw new NodeProcessException(e);
+        }
+        NameIDInfo info;
+        try {
+            if (persistNameId) {
+                info = new NameIDInfo(spName, entityName, getNameId(), SAML2Constants.SP_ROLE,
+                                      false);
+                attributes.putAll(AccountUtils.convertToAttributes(info, null));
             }
         } catch (SAML2Exception e) {
-            processError("SAML2.handleReturnFromRedirect : Unable to perform user lookup.", null);
+            throw new NodeProcessException(e);
         }
-        //TODO Handle local chain linking
-//        if (StringUtils.isBlank(localChain)) {
-//            processError(bundle.getString("localLinkError"), "SAML2 :: handleReturnFromRedirect() : "
-//                    + "Unable to perform local linking - local auth chain not found.");
-//        }
 
-        //generate a sub-login context, owned by this module, and start login sequence to it
-//        authenticationContext = new AuthContext(realm);
-//        authenticationContext.login(AuthContext.IndexType.SERVICE, localChain, null, null, null, null);
-//
-//        return injectCallbacks(null, state);
-        return Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.NO_ACCOUNT.name())
-                     .replaceSharedState(sharedState);
+        synchronized (SPCache.authnRequestHash) {
+            SPCache.authnRequestHash.put(storageKey, authnRequest);
+        }
+
+        sharedState.put(USER_INFO_SHARED_STATE_KEY, json(object(
+                field(ATTRIBUTES_SHARED_STATE_KEY, convertToMapOfList(attributes)),
+                field(USER_NAMES_SHARED_STATE_KEY,
+                      convertToMapOfList(Collections.singletonMap(SharedStateConstants.USERNAME,
+                                                                  Collections.singleton(username1)))))));
+
+        if (attributes.get(MAIL_KEY_MAPPING) != null) {
+            sharedState.put(EMAIL_ADDRESS, attributes.get(MAIL_KEY_MAPPING).stream().findAny().get());
+        } else {
+            logger.debug("Unable to ascertain email address because the information is not available. "
+                                 +
+                                 "It's possible you need to add a scope or that the configured provider does not have this "
+                                 + "information");
+        }
+        return sharedState;
     }
+
+
     private Map<String, ArrayList<String>> convertToMapOfList(Map<String, Set<String>> mapToConvert) {
         return mapToConvert.entrySet().stream().collect(toMap(Map.Entry::getKey, e -> new ArrayList<>(e.getValue())));
     }
@@ -501,7 +646,7 @@ public class SAML2Node extends AbstractDecisionNode {
     }
 
     /**
-     * Generates the redirect from SAML2 auth module to IDP as GET.
+     * Generates the redirect from SAML2 auth node to IDP as GET.
      */
     private RedirectCallback configureGetRedirectCallback(final String redirectUrl, RedirectCallback redirectCallback)
             throws AuthLoginException {
@@ -694,10 +839,9 @@ public class SAML2Node extends AbstractDecisionNode {
      * Adds information necessary for the session to be federated completely (if attributes are being
      * drawn in, and to configure ready for SLO).
      */
-    private Action.ActionBuilder setSessionProperties(Assertion assertion, NameID nameId, String userName)
+    private Action.ActionBuilder setSessionProperties(Action.ActionBuilder actionBuilder, NameID nameId)
             throws AuthLoginException, SAML2Exception {
-        //if we support single logout sp inititated from the auth module's resulting session
-        Action.ActionBuilder actionBuilder = Action.goTo("true");
+        //if we support single logout sp initiated from the auth node's resulting session
         actionBuilder.putSessionProperty(SAML2Constants.SINGLE_LOGOUT, String.valueOf(singleLogoutEnabled));
 
         if (singleLogoutEnabled && StringUtils.isNotEmpty(sloRelayState)) { //we also need to store the relay state
@@ -734,56 +878,52 @@ public class SAML2Node extends AbstractDecisionNode {
 //        linkAttributeValues(assertion, userName);
 //    }
 
-//    /**
-//     * Performs the functions of linking attribute values that have been received from the assertion
-//     * by building them into appropriate strings and asking the auth service to migrate them into session
-//     * properties once authentication is completed.
-//     */
-//    private void linkAttributeValues(Assertion assertion, String userName)
-//            throws AuthLoginException, SAML2Exception {
-//
-//        final String spName = metaManager.getEntityByMetaAlias(metaAlias);
-//        final SPSSOConfigElement spssoconfig = metaManager.getSPSSOConfig(realm.toString(), spName);
-//        final boolean needAssertionEncrypted =
-//                Boolean.parseBoolean(SAML2Utils.getAttributeValueFromSPSSOConfig(spssoconfig,
-//                                                                                 SAML2Constants.WANT_ASSERTION_ENCRYPTED));
-//        final boolean needAttributeEncrypted =
-//                SPACSUtils.getNeedAttributeEncrypted(needAssertionEncrypted, spssoconfig);
-//        final Set<PrivateKey> decryptionKeys = KeyUtil.getDecryptionKeys(spssoconfig);
-//        final List<com.sun.identity.saml2.assertion.Attribute> attrs = SPACSUtils.getAttrs(assertion, needAttributeEncrypted, decryptionKeys);
-//
-//        final SPAttributeMapper attrMapper = SAML2Utils.getSPAttributeMapper(realm, spName);
-//
-//        final Map<String, Set<String>> attrMap;
-//
-//        try {
-//            attrMap = attrMapper.getAttributes(attrs, userName, spName, entityName, realm);
-//        }  catch (SAML2Exception se) {
-//            return; //no attributes
-//        }
-//
-//        setUserAttributes(attrMap);
-//
-//        if (assertion.getAdvice() != null) {
-//            List<String> creds = assertion.getAdvice().getAdditionalInfo();
-//            attrMap.put(SAML2Constants.DISCOVERY_BOOTSTRAP_CREDENTIALS, new HashSet<>(creds));
-//        }
-//
-//        for (String name : attrMap.keySet()) {
-//            Set<String> value = attrMap.get(name);
-//            StringBuilder toStore = new StringBuilder();
-//
-//            if (CollectionUtils.isNotEmpty(value)) {
-//                // | is defined as the property value delimiter, cf FMSessionProvider#setProperty
-//                for (String toAdd : value) {
-//                    toStore.append(com.sun.identity.shared.StringUtils.getEscapedValue(toAdd))
-//                           .append(PROPERTY_VALUES_SEPARATOR);
-//                }
-//                toStore.deleteCharAt(toStore.length() - 1);
-//            }
-//            setUserSessionProperty(name, toStore.toString());
-////        }
-//    }
+    /**
+     * Performs the functions of linking attribute values that have been received from the assertion
+     * by building them into appropriate strings and asking the auth service to migrate them into session
+     * properties once authentication is completed.
+     */
+    private Map<String, Set<String>> linkAttributeValues(Assertion assertion, String userName)
+            throws SAML2Exception {
+
+        final String spName = metaManager.getEntityByMetaAlias(metaAlias);
+        final SPSSOConfigElement spssoconfig = metaManager.getSPSSOConfig(realm.toString(), spName);
+        final boolean needAssertionEncrypted =
+                Boolean.parseBoolean(SAML2Utils.getAttributeValueFromSPSSOConfig(spssoconfig,
+                                                                                 SAML2Constants.WANT_ASSERTION_ENCRYPTED));
+        final boolean needAttributeEncrypted =
+                SPACSUtils.getNeedAttributeEncrypted(needAssertionEncrypted, spssoconfig);
+        final Set<PrivateKey> decryptionKeys = KeyUtil.getDecryptionKeys(spssoconfig);
+        final List<com.sun.identity.saml2.assertion.Attribute> attrs = SPACSUtils.getAttrs(assertion, needAttributeEncrypted, decryptionKeys);
+
+        final SPAttributeMapper attrMapper = SAML2Utils.getSPAttributeMapper(realm.toString(), spName);
+
+        final Map<String, Set<String>> attrMap;
+
+        try {
+            attrMap = attrMapper.getAttributes(attrs, userName, spName, entityName, realm.toString());
+        }  catch (SAML2Exception se) {
+            return null; //no attributes
+        }
+
+        final Map<String, Set<String>> attrMapWithoutDelim = new HashMap<>();
+
+        for (String name : attrMap.keySet()) {
+            Set<String> value = attrMap.get(name);
+            StringBuilder toStore = new StringBuilder();
+
+            if (CollectionUtils.isNotEmpty(value)) {
+                // | is defined as the property value delimiter, cf FMSessionProvider#setProperty
+                for (String toAdd : value) {
+                    toStore.append(com.sun.identity.shared.StringUtils.getEscapedValue(toAdd))
+                           .append(PROPERTY_VALUES_SEPARATOR);
+                }
+                toStore.deleteCharAt(toStore.length() - 1);
+            }
+            attrMapWithoutDelim.put(name, Collections.singleton(toStore.toString()));
+        }
+        return attrMapWithoutDelim;
+    }
 
     /**
      * "Inspired" by the OAuth2 module. We use this cookie to remind us exactly where we are when
@@ -819,6 +959,19 @@ public class SAML2Node extends AbstractDecisionNode {
         }
     }
 
+    /**
+     * Clears out the cookie from the user agent so we don't leave detritus.
+     */
+    private void removeCookiesForRedirects(final HttpServletRequest request, final HttpServletResponse response) {
+        final Set<String> domains = AuthClientUtils.getCookieDomainsForRequest(request);
+
+        // Set the return URL Cookie
+        for (String domain : domains) {
+            CookieUtils.addCookieToResponse(response, CookieUtils
+                    .newCookie("authenticationStep", "", 0, "/", domain));
+        }
+    }
+
     private boolean shouldPersistNameID(String spEntityId) throws SAML2Exception {
         final DefaultLibrarySPAccountMapper spAccountMapper = new DefaultLibrarySPAccountMapper();
         final String spEntityID = SPSSOFederate.getSPEntityId(metaAlias);
@@ -827,16 +980,6 @@ public class SAML2Node extends AbstractDecisionNode {
 
         nameIDFormat = SAML2Utils.verifyNameIDFormat(nameIDFormat, spsso, idpsso);
         isTransient = SAML2Constants.NAMEID_TRANSIENT_FORMAT.equals(nameIDFormat);
-
-        //TODO Figure out how to get SSO Token within node framework
-//        Object session = null;
-//        try {
-//            session = getLoginState("shouldPersistNameID").getSSOToken();
-//        } catch (SSOException | AuthLoginException ssoe) {
-//            if (DEBUG.messageEnabled()) {
-//                DEBUG.message("SAML2 :: failed to get user's SSOToken.");
-//            }
-//        }
         boolean ignoreProfile = SAML2PluginsUtils.isIgnoredProfile(null, realm.toString());
 
         return !isTransient && !ignoreProfile

@@ -16,17 +16,13 @@
 
 package org.forgerock.openam.auth.nodes.SAML2Node;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
-
-import javax.inject.Inject;
 
 import org.forgerock.openam.auth.node.api.AbstractNodeAmPlugin;
 import org.forgerock.openam.auth.node.api.Node;
 import org.forgerock.openam.plugins.PluginException;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 /**
@@ -62,7 +58,7 @@ import org.slf4j.LoggerFactory;
  */
 public class SAML2NodePlugin extends AbstractNodeAmPlugin {
 
-	static private String currentVersion = "1.0.0";
+	static private String currentVersion = "1.0.1";
 	
     /** 
      * Specify the Map of list of node classes that the plugin is providing. These will then be installed and
@@ -72,8 +68,9 @@ public class SAML2NodePlugin extends AbstractNodeAmPlugin {
      */
 	@Override
 	protected Map<String, Iterable<? extends Class<? extends Node>>> getNodesByVersion() {
-		return Collections.singletonMap(SAML2NodePlugin.currentVersion, 
-				Collections.singletonList(SAML2Node.class));
+		return Collections.singletonMap(SAML2NodePlugin.currentVersion,
+										Arrays.asList(SAML2Node.class,
+													  WriteFederationInformation.class));
 	}
 
     /** 
