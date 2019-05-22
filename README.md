@@ -20,18 +20,19 @@ The SAML2 authentication node lets administrators integrate SAML v2.0 single sig
 You use the SAML2 authentication node when deploying SAML v2.0 single sign-on in integrated mode. In addition to 
 configuring the SAML2 authentication node properties, integrated mode deployment requires that you make several 
 changes to service provider configurations. Before attempting to configure a SAML2 authentication node instance, 
-review  ["Implementing SAML v2.0 Single Sign-On in Integrated Mode"](https://backstage.forgerock.com/docs/am/6.5/saml2-guide/index.html#saml2-integrated-mode-sso) in the SAML v2.0 Guide and make sure that you have made any required changes to your service provider configuration.
+review  ["Implementing SAML v2.0 Single Sign-On in Integrated Mode"](https://backstage.forgerock.com/docs/am/6.5/saml2-guide/index.html#saml2-integrated-mode-sso)
+in the SAML v2.0 Guide and make sure that you have made any required changes to your service provider configuration.
 
-
-Copy the .jar file from the ../target directory into the ../web-container/webapps/openam/WEB-INF/lib directory where AM is deployed.  Restart the web container to pick up the new node.  The node will then appear in the authentication trees components palette.
-
+**Note:** These nodes will only work with Access Management 6.5.2 and above.
 
 ## Usage
 
+To deploy these nodes, download the jar from the releases tab on github 
+[here](https://github.com/FrankGasparovic/SAML2Node6.5/releases/latest). Next, copy the jar into the 
+../web-container/webapps/openam/WEB-INF/lib directory where AM is deployed. Restart the web container to pick up the 
+new node. The node will then appear in the authentication trees components palette.
 
-The code in this repository has binary dependencies that live in the ForgeRock maven repository. Maven can be configured to authenticate to this repository by following the following [ForgeRock Knowledge Base Article](https://backstage.forgerock.com/knowledge/kb/article/a74096897).
-
-###Configuration
+### SAML2 Node Configuration
 * **IdP Entity ID** - Specifies the identity provider (IdP) for authentication requests to this module. Specify the name 
 of a SAML v2.0 entity provider that is defined in the SAML2 authentication module's realm. You can find configured 
 entity providers in the AM console under Federation. The Realm column identifies the realm in which an entity provider 
@@ -98,5 +99,5 @@ has been configured.
  
  ![SAML_LOCAL_LINKING_TREE](./images/saml_local_linking.png)
  
- Note the Write Federation Information Node. This node is used to create the persistent link between the remote IdP 
- account and the locally linked account. 
+ Note the Write Federation Information Node (also included in this plugin). This node is used to create the persistent
+ link between the remote IdP account and the locally linked account. 
