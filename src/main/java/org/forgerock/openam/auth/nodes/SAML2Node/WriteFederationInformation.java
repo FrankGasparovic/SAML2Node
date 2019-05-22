@@ -10,11 +10,9 @@ import org.forgerock.openam.auth.node.api.Node;
 import org.forgerock.openam.auth.node.api.NodeProcessException;
 import org.forgerock.openam.auth.node.api.SingleOutcomeNode;
 import org.forgerock.openam.auth.node.api.TreeContext;
-import org.forgerock.openam.auth.nodes.LdapDecisionNode;
 import org.forgerock.openam.core.CoreWrapper;
 
 import com.google.inject.Inject;
-import com.google.inject.assistedinject.Assisted;
 import com.iplanet.sso.SSOException;
 import com.sun.identity.idm.AMIdentity;
 import com.sun.identity.idm.IdRepoException;
@@ -22,7 +20,6 @@ import com.sun.identity.saml2.common.AccountUtils;
 
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -30,8 +27,7 @@ import java.util.Set;
         configClass      = WriteFederationInformation.Config.class)
 public class WriteFederationInformation extends SingleOutcomeNode {
 
-    CoreWrapper coreWrapper;
-    Config config;
+    private CoreWrapper coreWrapper;
 
     /**
      * Node configuration.
@@ -41,8 +37,7 @@ public class WriteFederationInformation extends SingleOutcomeNode {
     }
 
     @Inject
-    public WriteFederationInformation(@Assisted Config config, CoreWrapper coreWrapper) {
-        this.config = config;
+    public WriteFederationInformation(CoreWrapper coreWrapper) {
         this.coreWrapper = coreWrapper;
     }
 
