@@ -23,12 +23,12 @@
     <artifactId>saml2-node</artifactId>
 
     <groupId>org.forgerock.am</groupId>
-    <version>1.0.0</version>    
+    <version>1.0.2</version>
     <name>SAML2 Auth Tree Node</name>
     <description>An Authentication Tree Node for ForgeRock's Identity Platform</description>
 
     <properties>
-        <am.version>7.0.0-SNAPSHOT</am.version>
+        <am.version>6.5.2</am.version>
         <maven.compiler.source>1.8</maven.compiler.source>
         <maven.compiler.target>1.8</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

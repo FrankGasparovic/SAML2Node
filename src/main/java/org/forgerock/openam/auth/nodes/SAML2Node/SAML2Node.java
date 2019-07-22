@@ -793,7 +793,7 @@ public class SAML2Node extends AbstractDecisionNode {
         HTTP_POST{
             @Override
             public java.lang.String toString() {
-                return "HTTP-Post";
+                return "HTTP-POST";
             }
         }
     }
