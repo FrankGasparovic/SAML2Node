@@ -83,11 +83,6 @@
             <artifactId>auth-nodes</artifactId>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>org.forgerock.am</groupId>
-            <artifactId>openam-auth-saml2</artifactId>
-            <version>7.0.0-SNAPSHOT</version>
-        </dependency>
     </dependencies>
 
     <repositories>
