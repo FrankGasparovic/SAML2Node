@@ -30,6 +30,7 @@ import static org.forgerock.openam.auth.nodes.oauth.SocialOAuth2Helper.USER_INFO
 import static org.forgerock.openam.auth.nodes.oauth.SocialOAuth2Helper.USER_NAMES_SHARED_STATE_KEY;
 import static org.forgerock.openam.utils.Time.currentTimeMillis;
 
+import org.apache.commons.collections.MapUtils;
 import org.forgerock.guice.core.InjectorHolder;
 import org.forgerock.json.JsonValue;
 import org.forgerock.openam.annotations.sm.Attribute;
@@ -191,7 +192,7 @@ public class SAML2Node extends AbstractDecisionNode {
         @Attribute(order = 1200)
         default boolean sloEnabled() { return false; }
 
-        @Attribute(order = 1300)
+        @Attribute(order = 1500)
         default String sloRelay() { return "http://"; }
     }
 
@@ -681,7 +682,7 @@ public class SAML2Node extends AbstractDecisionNode {
                                                          Set<PrivateKey> decryptionKeys,
                                                          Assertion assertion,
                                                          String userName, boolean needAssertionEncrypted)
-            throws SAML2Exception {
+            throws SAML2Exception, NodeProcessException {
         final List<com.sun.identity.saml2.assertion.Attribute> attrs = SPACSUtils.getAttrs(assertion,
                             SPACSUtils.getNeedAttributeEncrypted(needAssertionEncrypted, spssoConfig), decryptionKeys);
 
@@ -693,6 +694,10 @@ public class SAML2Node extends AbstractDecisionNode {
             attrMap = attrMapper.getAttributes(attrs, userName, spName, entityName, realm);
         }  catch (SAML2Exception se) {
             return null; //no attributes
+        }
+
+        if (MapUtils.isEmpty(attrMap)) {
+            throw new NodeProcessException("SAML Attribute Map is empty for SP:" + spEntityID);
         }
 
         final Map<String, Set<String>> attrMapWithoutDelimiter = new HashMap<>();
@@ -811,11 +816,17 @@ public class SAML2Node extends AbstractDecisionNode {
                 return "urn:oasis:names:tc:SAML:2.0:nameid-format:transient";
             }
         },
-        UNSPECIFIED {
+        UNSPECIFIED_SAML1 {
+            @Override
+            public java.lang.String toString() {
+                return "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified";
+            }
+        },
+        UNSPECIFIED_SAML2 {
             @Override
             public java.lang.String toString() {
                 return "urn:oasis:names:tc:SAML:2.0:nameid-format:unspecified";
             }
-        },
+        }
     }
 }
