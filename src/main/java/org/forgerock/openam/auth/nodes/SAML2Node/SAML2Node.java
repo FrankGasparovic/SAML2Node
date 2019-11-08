@@ -816,6 +816,12 @@ public class SAML2Node extends AbstractDecisionNode {
                 return "urn:oasis:names:tc:SAML:2.0:nameid-format:transient";
             }
         },
+        EMAIL {
+            @Override
+            public java.lang.String toString() {
+                return "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress";
+            }
+        },
         UNSPECIFIED_SAML1 {
             @Override
             public java.lang.String toString() {
