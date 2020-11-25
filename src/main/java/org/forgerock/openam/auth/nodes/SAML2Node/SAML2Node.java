@@ -30,6 +30,22 @@ import static org.forgerock.openam.auth.nodes.oauth.SocialOAuth2Helper.USER_INFO
 import static org.forgerock.openam.auth.nodes.oauth.SocialOAuth2Helper.USER_NAMES_SHARED_STATE_KEY;
 import static org.forgerock.openam.utils.Time.currentTimeMillis;
 
+import java.security.PrivateKey;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.ResourceBundle;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+
+import javax.inject.Inject;
+import javax.security.auth.callback.Callback;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
 import org.apache.commons.collections.MapUtils;
 import org.forgerock.guice.core.InjectorHolder;
 import org.forgerock.json.JsonValue;
@@ -40,7 +56,6 @@ import org.forgerock.openam.auth.node.api.Node;
 import org.forgerock.openam.auth.node.api.NodeProcessException;
 import org.forgerock.openam.auth.node.api.SharedStateConstants;
 import org.forgerock.openam.auth.node.api.TreeContext;
-import org.forgerock.openam.auth.nodes.oauth.AbstractSocialAuthLoginNode;
 import org.forgerock.openam.authentication.modules.saml2.SAML2Proxy;
 import org.forgerock.openam.authentication.modules.saml2.SAML2ResponseData;
 import org.forgerock.openam.core.realms.Realm;
@@ -50,9 +65,11 @@ import org.forgerock.openam.utils.CollectionUtils;
 import org.forgerock.openam.utils.JsonValueBuilder;
 import org.forgerock.openam.utils.StringUtils;
 import org.forgerock.openam.xui.XUIState;
+import org.forgerock.util.i18n.PreferredLocales;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.collect.ImmutableList;
 import com.google.inject.assistedinject.Assisted;
 import com.sun.identity.authentication.client.AuthClientUtils;
 import com.sun.identity.authentication.spi.RedirectCallback;
@@ -89,26 +106,11 @@ import com.sun.identity.saml2.protocol.AuthnRequest;
 import com.sun.identity.shared.encode.CookieUtils;
 import com.sun.identity.sm.RequiredValueValidator;
 
-import java.security.PrivateKey;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.ResourceBundle;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import javax.inject.Inject;
-import javax.security.auth.callback.Callback;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
 
 /**
  * SAML2 Node
  */
-@Node.Metadata(outcomeProvider  = AbstractSocialAuthLoginNode.SocialAuthOutcomeProvider.class,
+@Node.Metadata(outcomeProvider  = SAML2Node.SAML2NodeOutcomeProvider.class,
                configClass      = SAML2Node.Config.class)
 public class SAML2Node extends AbstractDecisionNode {
 
@@ -123,7 +125,7 @@ public class SAML2Node extends AbstractDecisionNode {
 
 
 
-    private final Logger logger = LoggerFactory.getLogger(SAML2Node.class);
+    private final Logger logger = LoggerFactory.getLogger(SAML2Node.class.getSimpleName());
     private Map<String, List<String>> params = new HashMap<>();
 
     private final Config config;
@@ -147,7 +149,7 @@ public class SAML2Node extends AbstractDecisionNode {
     private String spEntityID;
     private String spName;
     private boolean isTransient;
-
+    protected final static String BUNDLEPATH = SAML2Node.class.getName().replace(".", "/");
 
     private static final String MAIL_KEY_MAPPING = "mail";
     private static final String PROPERTY_VALUES_SEPARATOR = "|";
@@ -246,7 +248,8 @@ public class SAML2Node extends AbstractDecisionNode {
         final HttpServletResponse response = context.request.servletResponse;
 
         if (null == request) {
-            throw new NodeProcessException("Unable to login without http request. Programmatic login is not supported.");
+      	  logger.error("Unable to login without http request. Programmatic login is not supported.");
+      	  return failure().build();
         }
         try {
             spName = metaManager.getEntityByMetaAlias(metaAlias);
@@ -259,8 +262,12 @@ public class SAML2Node extends AbstractDecisionNode {
             }
             return Action.send(initiateSAMLLoginAtIDP(request, response)).build();
         } catch (SAML2Exception e) {
-            throw new NodeProcessException(e);
-        }
+      	  logger.error("SAML2Exception while processing saml2 request : " + e);
+      	  return failure().build();
+        } catch (Exception e) {
+     	  		logger.error("Generic Exception while processing saml2 request : " + e);
+     	  		return failure().build();
+       }	
 
     }
 
@@ -272,7 +279,7 @@ public class SAML2Node extends AbstractDecisionNode {
             throws SAML2Exception, NodeProcessException {
 
         if (idpsso == null || spsso == null) {
-            throw new NodeProcessException("Failed to load SAML2 Configuration.");
+            throw new SAML2Exception("Failed to load SAML2 Configuration.");
         }
 
         final EndpointType endPoint = SPSSOFederate
@@ -339,7 +346,7 @@ public class SAML2Node extends AbstractDecisionNode {
         removeCookiesForRedirects(request, response);
 
         if (parseBoolean(request.getParameter(SAML2Proxy.ERROR_PARAM_KEY))) {
-            handleRedirectError(request);
+      	  return handleRedirectError(request);
         }
 
         if (request.getParameter(JSON_CONTENT) != null) {
@@ -358,7 +365,7 @@ public class SAML2Node extends AbstractDecisionNode {
                     try {
                         data = (SAML2ResponseData) SAML2FailoverUtils.retrieveSAML2Token(storageKey);
                     } catch (SAML2TokenRepositoryException e) {
-                        processError(bundle.getString("samlFailoverError"), "SAML2.handleReturnFromRedirect : Error " +
+                  	  return processError(bundle.getString("samlFailoverError"), "SAML2.handleReturnFromRedirect : Error " +
                                 "reading from failover map.", e);
                     }
                 }
@@ -366,7 +373,7 @@ public class SAML2Node extends AbstractDecisionNode {
         }
 
         if (data == null) {
-            processError(bundle.getString("localLinkError"), "SAML2 :: handleReturnFromRedirect() : Unable to perform" +
+      	  return processError(bundle.getString("localLinkError"), "SAML2 :: handleReturnFromRedirect() : Unable to perform" +
                     " local linking - response data not found");
         }
 
@@ -395,7 +402,8 @@ public class SAML2Node extends AbstractDecisionNode {
         }
 
         if (needNameIDEncrypted && encId == null) {
-            throw new NodeProcessException(SAML2Utils.bundle.getString("nameIDNotEncrypted"));
+      	  logger.error("SAML2Node: ID not encrypted : "+ SAML2Utils.bundle.getString("nameIDNotEncrypted"));
+      	  return failure();
         }
         if (encId != null) {
                 nameId = encId.decrypt(decryptionKeys);
@@ -409,14 +417,16 @@ public class SAML2Node extends AbstractDecisionNode {
         }
 
         if (spDesc == null) {
-            throw new NodeProcessException(SAML2Utils.bundle.getString("metaDataError"));
+      	  logger.error("SAML2Node: Metadata error : "+ SAML2Utils.bundle.getString("metaDataError"));
+      	  return failure();
         }
 
         if (nameIDFormat != null) {
             List spNameIDFormatList = spDesc.getNameIDFormat();
 
             if (CollectionUtils.isNotEmpty(spNameIDFormatList) && !spNameIDFormatList.contains(nameIDFormat)) {
-                throw new NodeProcessException("Unsupported NameIDFormat SP: " + nameIDFormat);
+            	logger.error("SAML2Node: Unsupported NameIDFormat SP: "+ nameIDFormat);
+            	return failure();
             }
         }
 
@@ -435,12 +445,12 @@ public class SAML2Node extends AbstractDecisionNode {
                 dn = SAML2Utils.getDataStoreProvider().getUserID(realm, nameIdKeyMap);
                 if (StringUtils.isNotEmpty(dn)) {
                     return setSessionProperties(Action
-                        .goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.ACCOUNT_EXISTS.name())
+                        .goTo(SAML2NodeOutcome.ACCOUNT_EXISTS.name())
                         .replaceSharedState(sharedState.put(SharedStateConstants.USERNAME,
                                                             new AMIdentity(null, dn).getName())), nameId);
                 }
             } catch (DataStoreProviderException | IdRepoException e) {
-                throw new NodeProcessException(e);
+            	return failure();
             }
         }
 
@@ -451,7 +461,7 @@ public class SAML2Node extends AbstractDecisionNode {
         //If this is the transient user being returned from the account mapper, return it
         if (StringUtils.isNotEmpty(dn) && StringUtils.isEqualTo(SAML2Utils.getAttributeValueFromSPSSOConfig(spssoConfig,
                                                                       SAML2Constants.TRANSIENT_FED_USER), dn)) {
-            return setSessionProperties(Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.ACCOUNT_EXISTS.name())
+            return setSessionProperties(Action.goTo(SAML2NodeOutcome.ACCOUNT_EXISTS.name())
                          .replaceSharedState(sharedState.put(SharedStateConstants.USERNAME, dn)), nameId);
 
         }
@@ -462,11 +472,11 @@ public class SAML2Node extends AbstractDecisionNode {
             if (persistNameId) {
                 persistFederationInfo(spName, nameId, dn);
             }
-            return setSessionProperties(Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.ACCOUNT_EXISTS.name())
+            return setSessionProperties(Action.goTo(SAML2NodeOutcome.ACCOUNT_EXISTS.name())
                          .replaceSharedState(sharedState.put(SharedStateConstants.USERNAME, username)), nameId);
         } catch (IdRepoException e) {
             // If it wasn't then setup attributes and go to No Account outcome.
-            return setSessionProperties(Action.goTo(AbstractSocialAuthLoginNode.SocialAuthOutcome.NO_ACCOUNT.name())
+            return setSessionProperties(Action.goTo(SAML2NodeOutcome.NO_ACCOUNT.name())
                          .replaceSharedState(setupAttributes(spssoConfig, decryptionKeys, nameId, spName, sharedState, dn,
                                                              persistNameId, needAssertionEncrypted)), nameId);
         }
@@ -510,12 +520,12 @@ public class SAML2Node extends AbstractDecisionNode {
                                       String spName,
                                       JsonValue sharedState, String username, boolean persistNameId,
                                       boolean needAssertionEncrypted)
-            throws NodeProcessException {
+            throws NodeProcessException, SAML2Exception {
         Map<String, Set<String>> attributes;
         try {
             attributes = linkAttributeValues(spssoConfig, decryptionKeys, authnAssertion, username, needAssertionEncrypted);
         } catch (SAML2Exception e) {
-            throw new NodeProcessException(e);
+      	  	throw e;
         }
         NameIDInfo info;
         try {
@@ -525,7 +535,7 @@ public class SAML2Node extends AbstractDecisionNode {
                 attributes.putAll(AccountUtils.convertToAttributes(info, null));
             }
         } catch (SAML2Exception e) {
-            throw new NodeProcessException(e);
+      	  	throw e;
         }
 
         synchronized (SPCache.authnRequestHash) {
@@ -608,31 +618,31 @@ public class SAML2Node extends AbstractDecisionNode {
      * Writes out an error debug (if a throwable and debug message are provided) and returns a user-facing
      * error page.
      */
-    private void processError(String headerMessage, String debugMessage,
+    private Action.ActionBuilder processError(String headerMessage, String debugMessage,
                              Object... messageParameters) throws NodeProcessException {
         if (null != debugMessage) {
             logger.error(debugMessage, messageParameters);
         }
-        throw new NodeProcessException(headerMessage);
+        return failure();
     }
 
     /**
      * Grab error code/message and display to user via processError.
      */
-    private void handleRedirectError(HttpServletRequest request) throws NodeProcessException {
+    private Action.ActionBuilder handleRedirectError(HttpServletRequest request) throws NodeProcessException {
         final String errorCode = request.getParameter(SAML2Proxy.ERROR_CODE_PARAM_KEY);
         final String errorMessage = request.getParameter(SAML2Proxy.ERROR_MESSAGE_PARAM_KEY);
 
         if (StringUtils.isNotEmpty(errorMessage)) {
-            processError(errorMessage, "SAML2 :: handleReturnFromRedirect() : "
+      	  	return processError(errorMessage, "SAML2 :: handleReturnFromRedirect() : "
                     + "error forwarded from saml2AuthAssertionConsumer.jsp.  Error code - {}. "
                     + "Error message - {}", String.valueOf(errorCode), errorMessage);
         } else if (StringUtils.isNotEmpty(errorCode)) {
-            processError(bundle.getString(errorCode), "SAML2 :: handleReturnFromRedirect() : "
+      	  	return processError(bundle.getString(errorCode), "SAML2 :: handleReturnFromRedirect() : "
                     + "error forwarded from saml2AuthAssertionConsumer.jsp.  Error code - {}. "
                     + "Error message - {}", errorCode, errorMessage);
         } else {
-            processError(bundle.getString("samlVerify"), "SAML2 :: handleReturnFromRedirect() : "
+      	  	return processError(bundle.getString("samlVerify"), "SAML2 :: handleReturnFromRedirect() : "
                     + "error forwarded from saml2AuthAssertionConsumer.jsp.  Error code - {}. "
                     + "Error message - {}", errorMessage);
         }
@@ -643,7 +653,7 @@ public class SAML2Node extends AbstractDecisionNode {
      * drawn in, and to configure ready for SLO).
      */
     private Action.ActionBuilder setSessionProperties(Action.ActionBuilder actionBuilder, NameID nameId)
-            throws NodeProcessException {
+            throws SAML2Exception {
         //if we support single logout sp initiated from the auth node's resulting session
         actionBuilder.putSessionProperty(SAML2Constants.SINGLE_LOGOUT, String.valueOf(singleLogoutEnabled));
 
@@ -661,7 +671,7 @@ public class SAML2Node extends AbstractDecisionNode {
             actionBuilder.putSessionProperty(SAML2Constants.SPENTITYID, SPSSOFederate.getSPEntityId(metaAlias));
             actionBuilder.putSessionProperty(SAML2Constants.NAMEID, nameId.toXMLString(true, true));
         } catch (SAML2Exception e) {
-            throw new NodeProcessException(e);
+            throw e;
         }
         actionBuilder.putSessionProperty(IDPENTITYID, entityName);
         actionBuilder.putSessionProperty(SAML2Constants.METAALIAS, metaAlias);
@@ -697,7 +707,7 @@ public class SAML2Node extends AbstractDecisionNode {
         }
 
         if (MapUtils.isEmpty(attrMap)) {
-            throw new NodeProcessException("SAML Attribute Map is empty for SP:" + spEntityID);
+            throw new SAML2Exception("SAML Attribute Map is empty for SP:" + spEntityID);
         }
 
         final Map<String, Set<String>> attrMapWithoutDelimiter = new HashMap<>();
@@ -835,4 +845,30 @@ public class SAML2Node extends AbstractDecisionNode {
             }
         }
     }
+    
+    public enum SAML2NodeOutcome {
+ 		// used if success
+ 		ACCOUNT_EXISTS,
+ 		// used if no account exists
+ 		NO_ACCOUNT,
+ 		// used if error
+ 		ERROR;
+ 	}
+    
+   public static class SAML2NodeOutcomeProvider implements org.forgerock.openam.auth.node.api.OutcomeProvider
+ 	{
+ 		@Override
+ 		public List<Outcome> getOutcomes(PreferredLocales locales, JsonValue nodeAttributes)
+ 		{
+ 			ResourceBundle bundle = locales.getBundleInPreferredLocale(SAML2Node.BUNDLEPATH, SAML2NodeOutcomeProvider.class.getClassLoader());
+ 			return ImmutableList.of(new Outcome(SAML2NodeOutcome.ACCOUNT_EXISTS.name(), bundle.getString("account_exists")),
+ 			                        new Outcome(SAML2NodeOutcome.NO_ACCOUNT.name(), bundle.getString("no_account")),
+ 			                        new Outcome(SAML2NodeOutcome.ERROR.name(), bundle.getString("error")));
+ 		}
+ 	}
+
+ 	private Action.ActionBuilder failure()
+ 	{
+ 		return Action.goTo(SAML2NodeOutcome.ERROR.name());
+ 	}
 }
