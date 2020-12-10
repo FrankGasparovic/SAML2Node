@@ -254,7 +254,10 @@ public class SAML2Node extends AbstractDecisionNode {
             idpsso = SPSSOFederate.getIDPSSOForAuthnReq(realm, entityName);
             spsso = SPSSOFederate.getSPSSOForAuthnReq(realm, spEntityID);
             nameIDFormat = SAML2Utils.verifyNameIDFormat(config.nameIdFormat().toString(), spsso, idpsso);
-            if (request.getParameterMap().containsKey("responsekey")) {
+            if (parseBoolean(request.getParameter(SAML2Proxy.ERROR_PARAM_KEY))) {
+            	logger.error("An error occurred while making SAML2 flow and request have error in it");
+            	return handleRedirectError(request).build();
+            } else if (request.getParameterMap().containsKey("responsekey")) {
                 return handleReturnFromRedirect(context, request, spName, response).build();
             }
             return Action.send(initiateSAMLLoginAtIDP(request, response)).build();
