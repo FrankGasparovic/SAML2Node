@@ -30,6 +30,7 @@ import static org.forgerock.openam.auth.nodes.oauth.SocialOAuth2Helper.USER_INFO
 import static org.forgerock.openam.auth.nodes.oauth.SocialOAuth2Helper.USER_NAMES_SHARED_STATE_KEY;
 import static org.forgerock.openam.utils.Time.currentTimeMillis;
 
+import java.nio.charset.StandardCharsets;
 import java.security.PrivateKey;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -65,6 +66,7 @@ import org.forgerock.openam.utils.CollectionUtils;
 import org.forgerock.openam.utils.JsonValueBuilder;
 import org.forgerock.openam.utils.StringUtils;
 import org.forgerock.openam.xui.XUIState;
+import org.forgerock.util.encode.Base64url;
 import org.forgerock.util.i18n.PreferredLocales;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -760,9 +762,12 @@ public class SAML2Node extends AbstractDecisionNode {
         }
 
         // Set the return URL Cookie
+        byte[] originalUrlBytes = originalUrl.toString().getBytes(StandardCharsets.UTF_8);
+        // Use Base64Url encoding so that the value syntax is consistent with RFC-6265
+        String base64UrlEncOrigUrl = Base64url.encode(originalUrlBytes);
         for (String domain : domains) {
             CookieUtils.addCookieToResponse(response,
-                                            CookieUtils.newCookie("authenticationStep", originalUrl.toString(), "/", domain));
+                                            CookieUtils.newCookie("authenticationStep", base64UrlEncOrigUrl, "/", domain));
         }
     }
 

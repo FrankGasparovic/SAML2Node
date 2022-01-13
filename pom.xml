@@ -23,7 +23,7 @@
     <artifactId>saml2-Node</artifactId>
 
     <groupId>org.forgerock.am</groupId>
-    <version>1.0.5</version>
+    <version>1.0.6-SNAPSHOT</version>
     <name>SAML2 Auth Tree Node</name>
     <description>An Authentication Tree Node for ForgeRock's Identity Platform</description>
 
